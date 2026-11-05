@@ -642,18 +642,37 @@ func unlockMutexForCall(mu *sync.Mutex, f func()) {
 func (item *Item) _store(ctx context.Context, storeFn StoreFn) (err error) {
 	// defer log.Trace(item.name, "item=%p", item)("err=%v", &err)
 
-	// Transfer the temp file to the remote
-	cacheObj, err := item.c.fcache.NewObject(ctx, item.name)
-	if err != nil && err != fs.ErrorObjectNotFound {
-		return fmt.Errorf("vfs cache: failed to find cache file: %w", err)
-	}
+	for {
+		// Transfer the temp file to the remote
+		var cacheObj fs.Object
+		cacheObj, err = item.c.fcache.NewObject(ctx, item.name)
+		if err != nil && err != fs.ErrorObjectNotFound {
+			return fmt.Errorf("vfs cache: failed to find cache file: %w", err)
+		}
 
-	// Object has disappeared if cacheObj == nil
-	if cacheObj != nil {
+		// Object has disappeared if cacheObj == nil
+		if cacheObj == nil {
+			break
+		}
 		o, name := item.o, item.name
 		unlockMutexForCall(&item.mu, func() {
 			o, err = operations.Copy(ctx, item.c.fremote, o, name, cacheObj)
 		})
+		if item.name != name && ctx.Err() == nil {
+			// The item was renamed while the mutex was unlocked, so
+			// the upload went to the old name, or failed because the
+			// cache file moved. Remove what was uploaded and upload
+			// again under the new name.
+			fs.Infof(name, "vfs cache: renamed to %q during upload, uploading again", item.name)
+			if err == nil && o != nil {
+				unlockMutexForCall(&item.mu, func() {
+					if rmErr := operations.DeleteFile(ctx, o); rmErr != nil && !errors.Is(rmErr, fs.ErrorObjectNotFound) {
+						fs.Errorf(name, "vfs cache: failed to remove object uploaded before rename: %v", rmErr)
+					}
+				})
+			}
+			continue
+		}
 		if err != nil {
 			if errors.Is(err, fs.ErrorCantUploadEmptyFiles) {
 				fs.Errorf(name, "Writeback failed: %v", err)
@@ -663,6 +682,7 @@ func (item *Item) _store(ctx context.Context, storeFn StoreFn) (err error) {
 		}
 		item.o = o
 		item._updateFingerprint()
+		break
 	}
 
 	// Write the object back to the VFS layer before we mark it as

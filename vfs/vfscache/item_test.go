@@ -869,3 +869,61 @@ func TestItemHandleCachingStaleReopenReadsRemote(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, contents, string(buf[:n]))
 }
+
+// renameOnPutFs calls rename once, at the start of the first Put.
+type renameOnPutFs struct {
+	fs.Fs
+	once   sync.Once
+	rename func()
+}
+
+func (f *renameOnPutFs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (fs.Object, error) {
+	f.once.Do(f.rename)
+	return f.Fs.Put(ctx, in, src, options...)
+}
+
+// A rename that lands while a synchronous store is uploading, such as
+// `sed -i` renaming its temp file over the target while the kernel
+// still processes the temp file's release, must leave the new
+// contents under the new name and nothing under the old one.
+func TestItemRenameDuringStore(t *testing.T) {
+	for _, ignoreChecksum := range []bool{false, true} {
+		t.Run(fmt.Sprintf("IgnoreChecksum=%v", ignoreChecksum), func(t *testing.T) {
+			r := fstest.NewRun(t)
+			ctx := context.Background()
+			if ignoreChecksum {
+				// Backends without a usable hash, such as S3 with
+				// SSE-KMS, can't detect the bad copy
+				var ci *fs.ConfigInfo
+				ctx, ci = fs.AddConfig(ctx)
+				ci.IgnoreChecksum = true
+			}
+			ctx, cancel := context.WithCancel(ctx)
+			opt := vfscommon.Opt
+			opt.CachePollInterval = 0
+			opt.WriteBack = 0
+			opt.HandleCaching = 0
+			var c *Cache
+			fremote := &renameOnPutFs{Fs: r.Fremote, rename: func() {
+				require.NoError(t, c.Rename("tmpfile", "target", nil))
+			}}
+			c, err := New(ctx, fremote, &opt, addVirtual)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				require.NoError(t, c.CleanUp())
+				cancel()
+			})
+			r.WriteObject(context.Background(), "target", "old contents", time.Now())
+
+			item, _ := c.get("tmpfile")
+			require.NoError(t, item.Open(nil))
+			_, err = item.WriteAt([]byte("new contents"), 0)
+			require.NoError(t, err)
+			require.NoError(t, item.Close(nil))
+
+			checkObject(t, r, "target", "new contents")
+			_, err = r.Fremote.NewObject(context.Background(), "tmpfile")
+			assert.ErrorIs(t, err, fs.ErrorObjectNotFound)
+		})
+	}
+}
