@@ -88,6 +88,7 @@ find that you need one or the other or both.
     --vfs-cache-min-free-space SizeSuffix  Target minimum free space on the disk containing the cache (default off)
     --vfs-cache-poll-interval duration     Interval to poll the cache for stale objects (default 1m0s)
     --vfs-write-back duration              Time to writeback files after last use when using cache (default 5s)
+    --vfs-write-back-on-flush              Upload modified files when their file descriptor is closed, before close returns
 ```
 
 If run with `-vv` rclone will print the location of the file cache.  The
@@ -104,6 +105,16 @@ closed and if they haven't been accessed for `--vfs-write-back`
 seconds. If rclone is quit or dies with files that haven't been
 uploaded, these will be uploaded next time rclone is run with the same
 flags.
+
+With `--vfs-write-back-on-flush`, a modified file is uploaded when a
+file descriptor for it is closed, and `close` returns only once the
+upload has finished, returning an error if the upload failed. This
+applies to mounts, where the upload happens when the kernel sends a
+FLUSH, which `close` waits for. Without it the upload happens on
+RELEASE, which `close` does not wait for, even with
+`--vfs-write-back 0`. Each `close` after writing then takes as long as
+the upload, so use this only when other clients must see the file as
+soon as `close` returns.
 
 If using `--vfs-cache-max-size` or `--vfs-cache-min-free-space` note
 that the cache may exceed these quotas for two reasons. Firstly

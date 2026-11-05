@@ -189,12 +189,24 @@ func (fh *RWFileHandle) Close() error {
 // Flush is called each time the file or directory is closed.
 // Because there can be multiple file descriptors referring to a
 // single opened file, Flush can be called multiple times.
+//
+// With --vfs-write-back-on-flush this uploads the file if it has been
+// modified, so close(2) returns only once the upload has finished.
 func (fh *RWFileHandle) Flush() error {
 	fh.mu.Lock()
+	defer fh.mu.Unlock()
 	fs.Debugf(fh.logPrefix(), "RWFileHandle.Flush")
 	fh.updateSize()
-	fh.mu.Unlock()
-	return nil
+	if !fh.d.vfs.Opt.WriteBackOnFlush || fh.closed || !fh.opened || fh.readOnly() {
+		return nil
+	}
+	fh.file.muRW.Lock()
+	defer fh.file.muRW.Unlock()
+	err := fh.item.StoreNow(fh.file.setObject)
+	if err != nil {
+		fs.Errorf(fh.logPrefix(), "RWFileHandle.Flush error: %v", err)
+	}
+	return err
 }
 
 // Release is called when we are finished with the file handle

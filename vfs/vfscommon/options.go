@@ -131,6 +131,11 @@ var OptionsInfo = fs.Options{{
 	Help:    "Time to writeback files after last use when using cache",
 	Groups:  "VFS",
 }, {
+	Name:    "vfs_write_back_on_flush",
+	Default: false,
+	Help:    "Upload modified files when their file descriptor is closed, before close returns",
+	Groups:  "VFS",
+}, {
 	Name:    "vfs_read_ahead",
 	Default: 0 * fs.Mebi,
 	Help:    "Extra read ahead over --buffer-size when using cache-mode full",
@@ -207,12 +212,13 @@ type Options struct {
 	CachePollInterval  fs.Duration   `config:"vfs_cache_poll_interval"`
 	CaseInsensitive    bool          `config:"vfs_case_insensitive"`
 	BlockNormDupes     bool          `config:"vfs_block_norm_dupes"`
-	WriteWait          fs.Duration   `config:"vfs_write_wait"`       // time to wait for in-sequence write
-	ReadWait           fs.Duration   `config:"vfs_read_wait"`        // time to wait for in-sequence read
-	WriteBack          fs.Duration   `config:"vfs_write_back"`       // time to wait before writing back dirty files
-	ReadAhead          fs.SizeSuffix `config:"vfs_read_ahead"`       // bytes to read ahead in cache mode "full"
-	UsedIsSize         bool          `config:"vfs_used_is_size"`     // if true, use the `rclone size` algorithm for Used size
-	FastFingerprint    bool          `config:"vfs_fast_fingerprint"` // if set use fast fingerprints
+	WriteWait          fs.Duration   `config:"vfs_write_wait"`          // time to wait for in-sequence write
+	ReadWait           fs.Duration   `config:"vfs_read_wait"`           // time to wait for in-sequence read
+	WriteBack          fs.Duration   `config:"vfs_write_back"`          // time to wait before writing back dirty files
+	WriteBackOnFlush   bool          `config:"vfs_write_back_on_flush"` // upload dirty files on flush (close of a file descriptor)
+	ReadAhead          fs.SizeSuffix `config:"vfs_read_ahead"`          // bytes to read ahead in cache mode "full"
+	UsedIsSize         bool          `config:"vfs_used_is_size"`        // if true, use the `rclone size` algorithm for Used size
+	FastFingerprint    bool          `config:"vfs_fast_fingerprint"`    // if set use fast fingerprints
 	DiskSpaceTotalSize fs.SizeSuffix `config:"vfs_disk_space_total_size"`
 	HandleCaching      fs.Duration   `config:"vfs_handle_caching"`     // time to keep handle alive after last close
 	MetadataExtension  string        `config:"vfs_metadata_extension"` // if set respond to files with this extension with metadata

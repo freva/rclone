@@ -284,6 +284,53 @@ func TestItemWriteAtExisting(t *testing.T) {
 	checkObject(t, r, "existing", contents[:10]+"HELLO"+contents[15:95]+"THEND"+zeroes[:20]+"THEVERYEND")
 }
 
+func TestItemStoreNow(t *testing.T) {
+	r, c := newItemTestCache(t)
+
+	contents, obj, item := newFile(t, r, c, "existing")
+
+	require.NoError(t, item.Open(obj))
+
+	// Nothing to do if the item is clean
+	require.NoError(t, item.StoreNow(nil))
+
+	n, err := item.WriteAt([]byte("HELLO"), 10)
+	require.NoError(t, err)
+	assert.Equal(t, 5, n)
+	assert.True(t, item.IsDirty())
+
+	// Uploads while the item is open, including the parts of the
+	// file not yet downloaded
+	require.NoError(t, item.StoreNow(nil))
+	assert.False(t, item.IsDirty())
+	checkObject(t, r, "existing", contents[:10]+"HELLO"+contents[15:])
+
+	require.NoError(t, item.Close(nil))
+	checkObject(t, r, "existing", contents[:10]+"HELLO"+contents[15:])
+}
+
+func TestItemStoreNowWriteDuringUpload(t *testing.T) {
+	r, c := newItemTestCache(t)
+	item, _ := c.get("potato")
+
+	require.NoError(t, item.Open(nil))
+	_, err := item.WriteAt([]byte("HELLO"), 0)
+	require.NoError(t, err)
+
+	// storeFn runs inside the upload with the item unlocked, so
+	// a write here stands in for a write through another handle
+	// while the upload is running.
+	require.NoError(t, item.StoreNow(func(fs.Object) {
+		_, err := item.WriteAt([]byte("THEND"), 5)
+		require.NoError(t, err)
+	}))
+	checkObject(t, r, "potato", "HELLO")
+	assert.True(t, item.IsDirty(), "write during upload must keep the item dirty")
+
+	require.NoError(t, item.Close(nil))
+	checkObject(t, r, "potato", "HELLOTHEND")
+}
+
 func TestItemLoadMeta(t *testing.T) {
 	r, c := newItemTestCache(t)
 

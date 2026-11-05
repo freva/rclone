@@ -68,6 +68,7 @@ type Item struct {
 	writeBackID     writeback.Handle         // id of any writebacks in progress
 	pendingAccesses int                      // number of threads - cache reset not allowed if not zero
 	modified        bool                     // set if the file has been modified since the last Open
+	changes         uint64                   // incremented on every change so StoreNow can detect writes during its upload
 	beingReset      bool                     // cache cleaner is resetting the cache file, access not allowed
 	graceTimer      *time.Timer              // timer for delayed close after grace period
 	closing         chan struct{}            // non-nil while a grace-period close is tearing the handle down, closed when done
@@ -431,6 +432,7 @@ func (item *Item) Exists() bool {
 //
 // call with lock held
 func (item *Item) _dirty() {
+	item.changes++
 	item.info.ModTime = time.Now()
 	item.info.ATime = item.info.ModTime
 	if !item.modified {
@@ -693,6 +695,61 @@ func (item *Item) store(ctx context.Context, storeFn StoreFn) (err error) {
 	item.mu.Lock()
 	defer item.mu.Unlock()
 	return item._store(ctx, storeFn)
+}
+
+// StoreNow uploads the item to the remote if it is dirty, leaving it
+// open.
+//
+// This is used by --vfs-write-back-on-flush. close(2) waits for the
+// FUSE FLUSH that calls this, but not for the FUSE RELEASE that
+// closes the item, so uploading here is what makes close(2) wait for
+// the upload and report its errors.
+//
+// If the item is changed through another handle while the upload is
+// running, it is left dirty so that it is uploaded again on close.
+func (item *Item) StoreNow(storeFn StoreFn) (err error) {
+	item.preAccess()
+	defer item.postAccess()
+	item.mu.Lock()
+	defer item.mu.Unlock()
+	if !item.info.Dirty {
+		return nil
+	}
+	if item.fd == nil {
+		return errors.New("vfs cache item StoreNow: internal error: didn't Open file")
+	}
+
+	// Cancel any queued or running writeback, as we upload now
+	// instead. writeback.mu must be taken before item.mu.
+	id := item.writeBackID
+	item.mu.Unlock()
+	item.c.writeback.Remove(id)
+	item.mu.Lock()
+
+	// Make sure any parts of the file not yet downloaded are present
+	if item.o != nil {
+		err = item._ensure(0, item.info.Size)
+		if err != nil {
+			return fmt.Errorf("vfs cache: failed to download missing parts of cache file: %w", err)
+		}
+	}
+
+	changes := item.changes
+	err = item._store(item.c.ctx, storeFn)
+	if err != nil {
+		return err
+	}
+	// _store unlocks item.mu during the upload and marks the item
+	// clean afterwards, so mark it dirty again if it was changed in
+	// the meantime.
+	if item.changes != changes && !item.info.Dirty {
+		item.info.Dirty = true
+		err = item._save()
+		if err != nil {
+			fs.Errorf(item.name, "vfs cache: failed to save item info: %v", err)
+		}
+	}
+	return nil
 }
 
 // Close the cache file

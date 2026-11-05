@@ -467,6 +467,44 @@ func TestRWFileHandleReleaseWrite(t *testing.T) {
 	assert.True(t, fh.closed)
 }
 
+func TestRWFileHandleFlushWriteBackOnFlush(t *testing.T) {
+	opt := vfscommon.Opt
+	opt.CacheMode = vfscommon.CacheModeFull
+	opt.WriteBack = fs.Duration(time.Hour) // only Flush can upload within the test
+	opt.WriteBackOnFlush = true
+	r, vfs := newTestVFSOpt(t, &opt)
+
+	remoteContents := func() string {
+		obj, err := r.Fremote.NewObject(context.Background(), "file1")
+		require.NoError(t, err)
+		in, err := obj.Open(context.Background())
+		require.NoError(t, err)
+		defer func() { require.NoError(t, in.Close()) }()
+		buf, err := io.ReadAll(in)
+		require.NoError(t, err)
+		return string(buf)
+	}
+
+	h, err := vfs.OpenFile("file1", os.O_WRONLY|os.O_CREATE, 0777)
+	require.NoError(t, err)
+	fh := h.(*RWFileHandle)
+
+	_, err = fh.Write([]byte("hello"))
+	require.NoError(t, err)
+	require.NoError(t, fh.Flush())
+	assert.False(t, fh.closed)
+	assert.Equal(t, "hello", remoteContents())
+
+	// A second write and flush on the same handle uploads again
+	_, err = fh.Write([]byte(" world"))
+	require.NoError(t, err)
+	require.NoError(t, fh.Flush())
+	assert.Equal(t, "hello world", remoteContents())
+
+	require.NoError(t, fh.Release())
+	assert.Equal(t, "hello world", remoteContents())
+}
+
 // check the size of the file through the open file (if not nil) and via stat
 func assertSize(t *testing.T, vfs *VFS, fh *RWFileHandle, filepath string, size int64) {
 	if fh != nil {

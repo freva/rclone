@@ -47,9 +47,10 @@ func RunTests(t *testing.T, useVFS bool, minimumRequiredCacheMode vfscommon.Cach
 		return
 	}
 	tests := []struct {
-		cacheMode vfscommon.CacheMode
-		writeBack fs.Duration
-		links     bool
+		cacheMode        vfscommon.CacheMode
+		writeBack        fs.Duration
+		writeBackOnFlush bool
+		links            bool
 	}{
 		{cacheMode: vfscommon.CacheModeOff},
 		{cacheMode: vfscommon.CacheModeOff, links: true},
@@ -58,6 +59,7 @@ func RunTests(t *testing.T, useVFS bool, minimumRequiredCacheMode vfscommon.Cach
 		{cacheMode: vfscommon.CacheModeFull},
 		{cacheMode: vfscommon.CacheModeFull, writeBack: fs.Duration(100 * time.Millisecond)},
 		{cacheMode: vfscommon.CacheModeFull, writeBack: fs.Duration(100 * time.Millisecond), links: true},
+		{cacheMode: vfscommon.CacheModeFull, writeBackOnFlush: true},
 	}
 	for _, test := range tests {
 		if test.cacheMode < minimumRequiredCacheMode {
@@ -66,11 +68,15 @@ func RunTests(t *testing.T, useVFS bool, minimumRequiredCacheMode vfscommon.Cach
 		vfsOpt := vfscommon.Opt
 		vfsOpt.CacheMode = test.cacheMode
 		vfsOpt.WriteBack = test.writeBack
+		vfsOpt.WriteBackOnFlush = test.writeBackOnFlush
 		vfsOpt.Links = test.links
 		run = newRun(useVFS, &vfsOpt, mountFn)
 		what := fmt.Sprintf("CacheMode=%v", test.cacheMode)
 		if test.writeBack > 0 {
 			what += fmt.Sprintf(",WriteBack=%v", test.writeBack)
+		}
+		if test.writeBackOnFlush {
+			what += ",WriteBackOnFlush=true"
 		}
 		if test.links {
 			what += fmt.Sprintf(",Links=%v", test.links)
